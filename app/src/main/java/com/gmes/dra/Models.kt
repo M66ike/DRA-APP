@@ -38,11 +38,11 @@ data class DraRecord(
     val contractsManager: String = "",
     val siteSupervisor: String = "",
     val discussionPoints: String = "",
-    val activities: List<ActivityItem> = listOf(ActivityItem()),
+    val activities: List<ActivityItem> = emptyList(),
     val preStartChecks: List<CheckItem> = defaultPreStartChecks(),
     val supervisorName: String = "",
     val supervisorSignatureBase64: String = "",
-    val attendees: List<Attendee> = listOf(Attendee()),
+    val attendees: List<Attendee> = emptyList(),
     val startedAt: Long? = null,
     val endShiftChecks: List<CheckItem> = defaultEndShiftChecks(),
     val improvements: String = "",
@@ -135,7 +135,7 @@ data class DraRecord(
                         controls = a.optString("controls")
                     )
                 }
-            }.orEmpty().ifEmpty { listOf(ActivityItem()) }
+            }.orEmpty().filter { it.planned.isNotBlank() || it.risks.isNotBlank() || it.controls.isNotBlank() }
 
             val attendees = o.optJSONArray("attendees")?.let { arr ->
                 (0 until arr.length()).map { i ->
@@ -146,7 +146,7 @@ data class DraRecord(
                         signatureBase64 = a.optString("signatureBase64")
                     )
                 }
-            }.orEmpty().ifEmpty { listOf(Attendee()) }
+            }.orEmpty().filter { it.name.isNotBlank() || it.signatureBase64.isNotBlank() }
 
             return DraRecord(
                 id = o.optString("id", UUID.randomUUID().toString()),
