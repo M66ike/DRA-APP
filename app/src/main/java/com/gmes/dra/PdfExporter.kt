@@ -1,6 +1,7 @@
 package com.gmes.dra
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
@@ -9,90 +10,428 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.os.Environment
+import android.util.Base64
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.max
 import kotlin.math.min
 
 object PdfExporter {
     private const val PAGE_W = 595
     private const val PAGE_H = 842
-    private const val M = 28f
-    private val navy = Color.rgb(24, 43, 73)
-    private val grey = Color.rgb(225, 228, 232)
+    private const val M = 12f
+
+    private val teal = Color.rgb(12, 110, 106)
+    private val darkGrey = Color.rgb(91, 91, 92)
+    private val coolGrey = Color.rgb(157, 157, 157)
+    private val headerGrey = Color.rgb(210, 210, 210)
+    private val border = Color.rgb(45, 45, 45)
 
     fun create(context: Context, dra: DraRecord): File {
+        val logos = Logos(
+            gmes = loadAssetBitmap(context, "gmes_logo.b64"),
+            smart = loadAssetBitmap(context, "think_smart_logo.b64")
+        )
         val document = PdfDocument()
-        pageActivities(document, dra)
-        pagePreStart(document, dra)
-        pageBriefing(document, dra)
-        pageCloseOut(document, dra)
+        pageActivities(document, dra, logos)
+        pagePreStart(document, dra, logos)
+        pageBriefing(document, dra, logos)
+        pageCloseOut(document, dra, logos)
+
         val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "GMES DRA")
         dir.mkdirs()
-        val safeJob = dra.jobNumber.ifBlank { "NoJob" }.replace(Regex("[^A-Za-z0-9_-]"), "_")
-        val file = File(dir, "DRA_${dra.date.replace("-", "")}_${safeJob}_${dra.status.replace(" ", "_")}.pdf")
+        val file = File(dir, "${dra.exportFileBaseName()}.pdf")
         FileOutputStream(file).use(document::writeTo)
         document.close()
         return file
     }
 
-    private fun startPage(doc: PdfDocument, number: Int, dra: DraRecord, title: String): Pair<PdfDocument.Page, Canvas> {
+    private data class Logos(val gmes: Bitmap?, val smart: Bitmap?)
+
+    private fun newPage(doc: PdfDocument, number: Int, logos: Logos): Pair<PdfDocument.Page, Canvas> {
         val page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, number).create())
         val c = page.canvas
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.color = navy; c.drawRect(0f, 0f, PAGE_W.toFloat(), 62f, p)
-        p.color = Color.WHITE; p.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); p.textSize = 18f
-        c.drawText("GMES Dynamic Risk Assessment", M, 28f, p)
-        p.textSize = 10f; c.drawText(title, M, 48f, p)
-        c.drawText("${dra.formReference}  •  ${displayDate(dra.date)}  •  ${dra.status}", 340f, 48f, p)
+        c.drawColor(Color.WHITE)
+        drawHeader(c, logos)
         return page to c
     }
 
-    private fun pageActivities(doc: PdfDocument, dra: DraRecord) {
-        val (page, c) = startPage(doc, 1, dra, "Daily planning and task risk review")
-        var y = 78f
-        val info = listOf("Form Reference" to dra.formReference,"Date" to displayDate(dra.date),"Job Number" to dra.jobNumber,"Client" to dra.client,"Project Name" to dra.projectName,"Contracts Manager" to dra.contractsManager,"Site Supervisor" to dra.siteSupervisor,"Status" to dra.status)
-        info.chunked(2).forEach { row -> row.forEachIndexed { i,p -> cell(c,M+i*(PAGE_W-2*M)/2,y,(PAGE_W-2*M)/2,31f,"${p.first}\n${p.second}",8.5f) }; y+=31f }
-        y += 8f; y = section(c,y,"Main discussion points from previous work day events and today's activities"); cell(c,M,y,PAGE_W-2*M,56f,dra.discussionPoints,9f); y+=66f
-        y = section(c,y,"Planned Activities / H&S and Quality Risks / Risk Control Measures")
-        val first=24f; val col=(PAGE_W-2*M-first)/3f
-        header(c,M,y,first,26f,"#"); header(c,M+first,y,col,26f,"Planned Activities"); header(c,M+first+col,y,col,26f,"H&S and Quality Risks"); header(c,M+first+2*col,y,col,26f,"Risk Control Measures"); y+=26f
-        dra.activities.filter{it.planned.isNotBlank()||it.risks.isNotBlank()||it.controls.isNotBlank()}.take(14).forEachIndexed { i,a ->
-            val h=39f; cell(c,M,y,first,h,"${i+1}",8f); cell(c,M+first,y,col,h,a.planned,8f); cell(c,M+first+col,y,col,h,a.risks,8f); cell(c,M+first+2*col,y,col,h,a.controls,8f); y+=h
+    private fun drawHeader(c: Canvas, logos: Logos) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = teal }
+        c.drawRect(M, 11f, PAGE_W - M, 16f, p)
+        logos.gmes?.let { drawBitmapFit(c, it, RectF(M, 22f, 185f, 88f)) }
+        logos.smart?.let { drawBitmapFit(c, it, RectF(370f, 25f, PAGE_W - M, 86f)) }
+    }
+
+    private fun pageActivities(doc: PdfDocument, dra: DraRecord, logos: Logos) {
+        val (page, c) = newPage(doc, 1, logos)
+        var y = 96f
+        val status = displayStatus(dra.status)
+        y = tealBar(c, y, "GMES Dynamic Risk Assessment - $status", 14f, 30f)
+
+        val labelW = 132f
+        val totalW = PAGE_W - 2 * M
+        val details = listOf(
+            "Form Reference" to dra.formReferenceLabel(),
+            "Status" to status,
+            "Date" to displayDate(dra.date),
+            "Job Number" to dra.jobNumber,
+            "Client" to dra.client,
+            "Project Name" to dra.projectName
+        )
+        details.forEach { (label, value) ->
+            detailRow(c, y, labelW, totalW, label, value)
+            y += 19f
         }
-        footer(c,1); doc.finishPage(page)
+        c.drawRect(M, y, PAGE_W - M, y + 5f, Paint().apply { color = teal })
+        y += 5f
+        listOf(
+            "Contracts Manager" to dra.contractsManager,
+            "Site Supervisor" to dra.siteSupervisor
+        ).forEach { (label, value) ->
+            detailRow(c, y, labelW, totalW, label, value)
+            y += 19f
+        }
+
+        y = tealBar(c, y, "Main discussion points from previous work day events and todays activities", 9.5f, 21f)
+        if (dra.discussionPoints.isNotBlank()) {
+            val h = 33f
+            borderedCell(c, M, y, totalW, h, dra.discussionPoints, 8.5f)
+            y += h
+        }
+
+        val numW = 16f
+        val plannedW = 171f
+        val riskW = 172f
+        val controlW = totalW - numW - plannedW - riskW
+        tableHeader(c, M, y, numW, 27f, "#", 8.5f)
+        tableHeader(c, M + numW, y, plannedW, 27f, "Planned Activities", 8.5f)
+        tableHeader(c, M + numW + plannedW, y, riskW, 27f, "H&S and Quality Risks", 8.5f)
+        tableHeader(c, M + numW + plannedW + riskW, y, controlW, 27f, "Risk Control Measures", 8.5f)
+        y += 27f
+
+        val used = dra.activities.filter { it.planned.isNotBlank() || it.risks.isNotBlank() || it.controls.isNotBlank() }.take(14)
+        val rows = if (used.isEmpty()) List(14) { ActivityItem() } else used
+        val remaining = 830f - y
+        val basePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 8.2f; typeface = Typeface.DEFAULT }
+        val desired = rows.map { a ->
+            max(
+                33f,
+                max(
+                    requiredTextHeight(a.planned, plannedW - 6f, basePaint),
+                    max(
+                        requiredTextHeight(a.risks, riskW - 6f, basePaint),
+                        requiredTextHeight(a.controls, controlW - 6f, basePaint)
+                    )
+                ) + 7f
+            )
+        }
+        val desiredTotal = desired.sum()
+        val heights = if (desiredTotal <= remaining) {
+            val extra = (remaining - desiredTotal) / rows.size
+            desired.map { it + extra }
+        } else {
+            val scale = remaining / desiredTotal
+            desired.map { it * scale }
+        }
+
+        rows.forEachIndexed { i, a ->
+            val h = heights[i]
+            borderedCell(c, M, y, numW, h, "${i + 1}", 8f)
+            borderedCell(c, M + numW, y, plannedW, h, a.planned, 8.2f)
+            borderedCell(c, M + numW + plannedW, y, riskW, h, a.risks, 8.2f)
+            borderedCell(c, M + numW + plannedW + riskW, y, controlW, h, a.controls, 8.2f)
+            y += h
+        }
+
+        doc.finishPage(page)
     }
 
-    private fun pagePreStart(doc: PdfDocument, dra: DraRecord) {
-        val (page,c)=startPage(doc,2,dra,"Pre-start checks and supervisor sign-off")
-        var y=78f; y=section(c,y,"Pre-start Checks"); cell(c,M,y,PAGE_W-2*M,38f,"Before starting work STOP, THINK and CHECK! What's the worst that could happen specific to your tasks? What will stop you going home safe today?",8.5f); y+=43f
-        dra.preStartChecks.forEachIndexed { i,x -> val h=53f; cell(c,M,y,24f,h,"${i+1}",8f); cell(c,M+24f,y,355f,h,x.question,8f); cell(c,M+379f,y,55f,h,ans(x.answer),8f,true); cell(c,M+434f,y,PAGE_W-2*M-434f,h,x.comments,7.5f); y+=h }
-        y+=6f; y=section(c,y,"Supervisor's Signature"); cell(c,M,y,180f,60f,"Name\n${dra.supervisorName.ifBlank{dra.siteSupervisor}}",8.5f); sigCell(c,M+180f,y,PAGE_W-2*M-180f,60f,dra.supervisorSignatureBase64)
-        footer(c,2); doc.finishPage(page)
+    private fun pagePreStart(doc: PdfDocument, dra: DraRecord, logos: Logos) {
+        val (page, c) = newPage(doc, 2, logos)
+        var y = 100f
+        y = tealBar(c, y, "Pre-start Checks", 10f, 23f)
+
+        val prompt = "Before starting work STOP, THINK and CHECK! What’s the worst that could happen specific to your tasks? What will stop you going home safe today?"
+        val pp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = 12.5f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        wrap(c, prompt, M + 3f, y + 7f, PAGE_W - 2 * M - 6f, 58f, pp, false)
+        y += 64f
+
+        val numW = 16f
+        val ansW = 56f
+        val mainW = PAGE_W - 2 * M - numW - ansW
+        val available = 748f - y
+        val rowH = available / 7f
+        dra.preStartChecks.take(7).forEachIndexed { i, item ->
+            drawCheckRow(c, y, numW, mainW, ansW, rowH, i + 1, item)
+            y += rowH
+        }
+
+        y += 1f
+        y = tealBar(c, y, "STOP if anything changes!", 9.5f, 21f)
+        val note = "If you or your team change tasks during the day, consider whether the DRA needs reviewing, think about the items above and re-evaluate if needed."
+        val np = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = 9f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        wrap(c, note, M + 2f, y + 5f, PAGE_W - 2 * M - 4f, 55f, np, false)
+
+        doc.finishPage(page)
     }
 
-    private fun pageBriefing(doc: PdfDocument, dra: DraRecord) {
-        val (page,c)=startPage(doc,3,dra,"Team briefing acknowledgements")
-        var y=78f; y=section(c,y,"Briefing attendees"); cell(c,M,y,PAGE_W-2*M,42f,"I have been briefed and I understand my dynamic risk assessment, the key risks and required control measures specific to the tasks I am completing today.",8.5f); y+=50f
-        header(c,M,y,24f,24f,"#"); header(c,M+24f,y,190f,24f,"Name"); header(c,M+214f,y,PAGE_W-2*M-214f,24f,"Signature"); y+=24f
-        dra.attendees.take(8).forEachIndexed { i,a -> val h=70f; cell(c,M,y,24f,h,"${i+1}",8f); cell(c,M+24f,y,190f,h,a.name,8.5f); sigCell(c,M+214f,y,PAGE_W-2*M-214f,h,a.signatureBase64); y+=h }
-        footer(c,3); doc.finishPage(page)
+    private fun pageBriefing(doc: PdfDocument, dra: DraRecord, logos: Logos) {
+        val (page, c) = newPage(doc, 3, logos)
+        var y = 100f
+        y = tealBar(c, y, "Supervisor's Signature", 10f, 22f)
+
+        val totalW = PAGE_W - 2 * M
+        val nameW = 242f
+        val sigW = totalW - nameW
+        tableHeader(c, M, y, nameW, 20f, "Name", 8.5f, false)
+        tableHeader(c, M + nameW, y, sigW, 20f, "Signature", 8.5f, false)
+        y += 20f
+        val supervisor = dra.supervisorName.ifBlank { dra.siteSupervisor }
+        borderedCell(c, M, y, nameW, 70f, supervisor, 9f, false, true)
+        signatureCell(c, M + nameW, y, sigW, 70f, dra.supervisorSignatureBase64)
+        y += 74f
+
+        val statement = "I have been briefed and I understand my dynamic risk assessment, the key risks and required control measures specific to the tasks I am completing today"
+        val sp = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 9.2f }
+        wrap(c, statement, M + 2f, y, totalW - 4f, 34f, sp, false)
+        y += 35f
+
+        y = tealBar(c, y, "Breifing attendees", 9.5f, 21f)
+        val numW = 16f
+        val attendeeNameW = 226f
+        val attendeeSigW = totalW - numW - attendeeNameW
+        tableHeader(c, M, y, numW, 20f, "#", 8f)
+        tableHeader(c, M + numW, y, attendeeNameW, 20f, "Name", 8.5f, false)
+        tableHeader(c, M + numW + attendeeNameW, y, attendeeSigW, 20f, "Signature", 8.5f, false)
+        y += 20f
+
+        val rowH = (830f - y) / 8f
+        val attendees = (dra.attendees + List(8) { Attendee() }).take(8)
+        attendees.forEachIndexed { i, a ->
+            borderedCell(c, M, y, numW, rowH, "${i + 1}", 8f)
+            borderedCell(c, M + numW, y, attendeeNameW, rowH, a.name, 8.8f, false, true)
+            signatureCell(c, M + numW + attendeeNameW, y, attendeeSigW, rowH, a.signatureBase64)
+            y += rowH
+        }
+
+        doc.finishPage(page)
     }
 
-    private fun pageCloseOut(doc: PdfDocument, dra: DraRecord) {
-        val (page,c)=startPage(doc,4,dra,"End of shift checks and close-out")
-        var y=78f; y=section(c,y,"STOP if anything changes!"); cell(c,M,y,PAGE_W-2*M,42f,"If you or your team change tasks during the day, consider whether the DRA needs reviewing. Think about the items above and re-evaluate if needed.",8.5f); y+=52f
-        y=section(c,y,"End of shift checks")
-        dra.endShiftChecks.forEachIndexed { i,x -> val h=68f; cell(c,M,y,24f,h,"${i+1}",8f); cell(c,M+24f,y,355f,h,x.question,8f); cell(c,M+379f,y,55f,h,ans(x.answer),8f,true); cell(c,M+434f,y,PAGE_W-2*M-434f,h,x.comments,7.5f); y+=h }
-        y+=10f; y=section(c,y,"Points for discussion / matters raised / improvements"); cell(c,M,y,PAGE_W-2*M,92f,dra.improvements,8.5f); y+=102f
-        y=section(c,y,"Signed at the end of activity"); cell(c,M,y,200f,50f,"Supervisor Name\n${dra.closeSupervisorName}",8.5f); cell(c,M+200f,y,100f,50f,"Time Closed\n${displayDateTime(dra.closedAt)}",8.5f); sigCell(c,M+300f,y,PAGE_W-2*M-300f,50f,dra.closeSignatureBase64)
-        footer(c,4); doc.finishPage(page)
+    private fun pageCloseOut(doc: PdfDocument, dra: DraRecord, logos: Logos) {
+        val (page, c) = newPage(doc, 4, logos)
+        var y = 100f
+        y = tealBar(c, y, "End of shift checks", 10f, 22f)
+
+        val numW = 16f
+        val ansW = 56f
+        val mainW = PAGE_W - 2 * M - numW - ansW
+        val rowH = 91f
+        dra.endShiftChecks.take(4).forEachIndexed { i, item ->
+            drawCheckRow(c, y, numW, mainW, ansW, rowH, i + 1, item)
+            y += rowH
+        }
+
+        y = tealBar(c, y, "Points for discussion / matters raised i.e. What Improvements can be made?", 9.2f, 22f)
+        borderedCell(c, M, y, PAGE_W - 2 * M, 22f, "Supervisor to record feedback and discuss with managers.", 8.7f, false, true)
+        y += 22f
+
+        val commentsH = 91f
+        drawLabeledCommentBox(c, M, y, PAGE_W - 2 * M, commentsH, dra.improvements)
+        y += commentsH
+
+        y = tealBar(c, y, "Signed (at the end of activity)", 9.5f, 22f)
+        val totalW = PAGE_W - 2 * M
+        val leftW = totalW * 0.515f
+        val rightW = totalW - leftW
+        tableHeader(c, M, y, leftW, 22f, "Supervisor Name", 8.8f, false)
+        tableHeader(c, M + leftW, y, rightW, 22f, "Time Closed", 8.8f, false)
+        y += 22f
+        borderedCell(c, M, y, leftW, 70f, dra.closeSupervisorName.ifBlank { dra.siteSupervisor }, 9f, false, true)
+        borderedCell(c, M + leftW, y, rightW, 70f, displayDateTime(dra.closedAt), 9f, false, true)
+        y += 70f
+        tableHeader(c, M, y, totalW, 22f, "Signature", 8.8f, false)
+        y += 22f
+        signatureCell(c, M, y, totalW, 830f - y, dra.closeSignatureBase64)
+
+        doc.finishPage(page)
     }
 
-    private fun section(c:Canvas,y:Float,text:String):Float { val p=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=navy}; c.drawRect(M,y,PAGE_W-M,y+24f,p); p.color=Color.WHITE;p.textSize=10f;p.typeface=Typeface.DEFAULT_BOLD;c.drawText(text,M+7f,y+16f,p);return y+24f }
-    private fun header(c:Canvas,x:Float,y:Float,w:Float,h:Float,text:String){val p=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=grey};c.drawRect(x,y,x+w,y+h,p);p.color=Color.DKGRAY;p.style=Paint.Style.STROKE;c.drawRect(x,y,x+w,y+h,p);p.style=Paint.Style.FILL;p.color=Color.BLACK;p.textSize=8f;p.typeface=Typeface.DEFAULT_BOLD;wrap(c,text,x+4,y+4,w-8,h-8,p,true)}
-    private fun cell(c:Canvas,x:Float,y:Float,w:Float,h:Float,text:String,size:Float,center:Boolean=false){val b=Paint().apply{color=Color.WHITE};c.drawRect(x,y,x+w,y+h,b);val p=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=Color.DKGRAY;style=Paint.Style.STROKE;strokeWidth=.6f};c.drawRect(x,y,x+w,y+h,p);p.style=Paint.Style.FILL;p.color=Color.BLACK;p.textSize=size;wrap(c,text,x+4,y+4,w-8,h-8,p,center)}
-    private fun sigCell(c:Canvas,x:Float,y:Float,w:Float,h:Float,b64:String){cell(c,x,y,w,h,if(b64.isBlank())"Signature" else "",8f);val bytes=decodeSignature(b64)?:return;val bmp=BitmapFactory.decodeByteArray(bytes,0,bytes.size)?:return;val s=min((w-10)/bmp.width,(h-10)/bmp.height);val dw=bmp.width*s;val dh=bmp.height*s;c.drawBitmap(bmp,null,RectF(x+(w-dw)/2,y+(h-dh)/2,x+(w+dw)/2,y+(h+dh)/2),Paint(Paint.ANTI_ALIAS_FLAG))}
-    private fun wrap(c:Canvas,text:String,x:Float,y:Float,w:Float,h:Float,p:Paint,center:Boolean){if(text.isBlank())return;val lh=p.textSize*1.22f;val max=(h/lh).toInt().coerceAtLeast(1);val lines=mutableListOf<String>();text.split("\n").forEach{para->var line="";para.split(Regex("\\s+")).filter{it.isNotEmpty()}.forEach{word->val t=if(line.isEmpty())word else "$line $word";if(p.measureText(t)<=w||line.isEmpty())line=t else{lines+=line;line=word}};if(line.isNotEmpty())lines+=line};lines.take(max).forEachIndexed{i,l->val dx=if(center)x+(w-p.measureText(l))/2 else x;c.drawText(l,dx,y+p.textSize+i*lh,p)}}
-    private fun ans(a:Boolean?)=when(a){true->"YES";false->"NO";null->"—"}
-    private fun footer(c:Canvas,n:Int){val p=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=Color.GRAY;textSize=7.5f};c.drawText("GMES • Dynamic Risk Assessment • FM_047_8",M,PAGE_H-18f,p);c.drawText("Page $n of 4",PAGE_W-75f,PAGE_H-18f,p)}
+    private fun detailRow(c: Canvas, y: Float, labelW: Float, totalW: Float, label: String, value: String) {
+        filledCell(c, M, y, labelW, 19f, headerGrey, label, 8.2f, false, true)
+        borderedCell(c, M + labelW, y, totalW - labelW, 19f, value, 8.4f, false, true, true)
+    }
+
+    private fun drawCheckRow(
+        c: Canvas,
+        y: Float,
+        numW: Float,
+        mainW: Float,
+        ansW: Float,
+        h: Float,
+        number: Int,
+        item: CheckItem
+    ) {
+        borderedCell(c, M, y, numW, h, number.toString(), 8f, false, true)
+        val x = M + numW
+        val questionH = max(35f, h * 0.53f)
+        borderedCell(c, x, y, mainW, questionH, item.question, 8.2f, false, false)
+        drawLabeledCommentBox(c, x, y + questionH, mainW, h - questionH, item.comments)
+        borderedCell(c, x + mainW, y, ansW, h, ans(item.answer), 8.8f, true, true, true)
+    }
+
+    private fun drawLabeledCommentBox(c: Canvas, x: Float, y: Float, w: Float, h: Float, text: String) {
+        val labelW = 70f.coerceAtMost(w * 0.22f)
+        borderedCell(c, x, y, labelW, h, "Comments:", 7.8f, false, false, true)
+        borderedCell(c, x + labelW, y, w - labelW, h, text, 8f, false, false)
+    }
+
+    private fun tealBar(c: Canvas, y: Float, text: String, textSize: Float, h: Float): Float {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = teal }
+        c.drawRect(M, y, PAGE_W - M, y + h, p)
+        val t = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            this.textSize = textSize
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val baseline = y + (h - (t.descent() + t.ascent())) / 2f
+        c.drawText(text, M + 4f, baseline, t)
+        return y + h
+    }
+
+    private fun tableHeader(c: Canvas, x: Float, y: Float, w: Float, h: Float, text: String, size: Float, center: Boolean = true) {
+        filledCell(c, x, y, w, h, headerGrey, text, size, center, true)
+    }
+
+    private fun filledCell(c: Canvas, x: Float, y: Float, w: Float, h: Float, fill: Int, text: String, size: Float, center: Boolean, bold: Boolean) {
+        val bg = Paint().apply { color = fill }
+        c.drawRect(x, y, x + w, y + h, bg)
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = border; style = Paint.Style.STROKE; strokeWidth = 0.8f }
+        c.drawRect(x, y, x + w, y + h, line)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = size
+            typeface = if (bold) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
+        }
+        wrap(c, text, x + 3f, y + 2f, w - 6f, h - 4f, p, center)
+    }
+
+    private fun borderedCell(
+        c: Canvas,
+        x: Float,
+        y: Float,
+        w: Float,
+        h: Float,
+        text: String,
+        size: Float,
+        center: Boolean = false,
+        verticalCenter: Boolean = false,
+        bold: Boolean = false
+    ) {
+        val bg = Paint().apply { color = Color.WHITE }
+        c.drawRect(x, y, x + w, y + h, bg)
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = border; style = Paint.Style.STROKE; strokeWidth = 0.8f }
+        c.drawRect(x, y, x + w, y + h, line)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = size
+            typeface = if (bold) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
+        }
+        if (verticalCenter && text.isNotBlank()) {
+            val lines = wrappedLines(text, w - 6f, p)
+            val lh = p.textSize * 1.22f
+            val textH = lines.size * lh
+            val yy = y + max(2f, (h - textH) / 2f)
+            drawLines(c, lines, x + 3f, yy, w - 6f, h - 4f, p, center)
+        } else {
+            wrap(c, text, x + 3f, y + 2f, w - 6f, h - 4f, p, center)
+        }
+    }
+
+    private fun signatureCell(c: Canvas, x: Float, y: Float, w: Float, h: Float, b64: String) {
+        borderedCell(c, x, y, w, h, "", 8f)
+        val bytes = decodeSignature(b64) ?: return
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+        val scale = min((w - 12f) / bmp.width, (h - 10f) / bmp.height)
+        val dw = bmp.width * scale
+        val dh = bmp.height * scale
+        c.drawBitmap(bmp, null, RectF(x + (w - dw) / 2f, y + (h - dh) / 2f, x + (w + dw) / 2f, y + (h + dh) / 2f), Paint(Paint.ANTI_ALIAS_FLAG))
+    }
+
+    private fun drawBitmapFit(c: Canvas, bitmap: Bitmap, box: RectF) {
+        val scale = min(box.width() / bitmap.width, box.height() / bitmap.height)
+        val w = bitmap.width * scale
+        val h = bitmap.height * scale
+        val left = box.left
+        val top = box.top + (box.height() - h) / 2f
+        c.drawBitmap(bitmap, null, RectF(left, top, left + w, top + h), Paint(Paint.ANTI_ALIAS_FLAG))
+    }
+
+    private fun loadAssetBitmap(context: Context, name: String): Bitmap? = runCatching {
+        val raw = context.assets.open(name).bufferedReader().use { it.readText() }
+        val bytes = Base64.decode(raw, Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }.getOrNull()
+
+    private fun displayStatus(status: String): String = when (status) {
+        STATUS_IN_PROGRESS -> "Open"
+        STATUS_CLOSED -> "Closed"
+        else -> "Not Started"
+    }
+
+    private fun ans(a: Boolean?): String = when (a) {
+        true -> "Yes"
+        false -> "No"
+        null -> ""
+    }
+
+    private fun requiredTextHeight(text: String, width: Float, p: Paint): Float {
+        if (text.isBlank()) return p.textSize * 1.22f
+        return wrappedLines(text, width, p).size * p.textSize * 1.22f
+    }
+
+    private fun wrap(c: Canvas, text: String, x: Float, y: Float, w: Float, h: Float, p: Paint, center: Boolean) {
+        if (text.isBlank()) return
+        val lines = wrappedLines(text, w, p)
+        drawLines(c, lines, x, y, w, h, p, center)
+    }
+
+    private fun drawLines(c: Canvas, lines: List<String>, x: Float, y: Float, w: Float, h: Float, p: Paint, center: Boolean) {
+        val lh = p.textSize * 1.22f
+        val maxLines = (h / lh).toInt().coerceAtLeast(1)
+        lines.take(maxLines).forEachIndexed { i, line ->
+            val dx = if (center) x + (w - p.measureText(line)) / 2f else x
+            c.drawText(line, dx, y + p.textSize + i * lh, p)
+        }
+    }
+
+    private fun wrappedLines(text: String, width: Float, p: Paint): List<String> {
+        val lines = mutableListOf<String>()
+        text.split("\n").forEach { para ->
+            if (para.isBlank()) {
+                lines += ""
+            } else {
+                var line = ""
+                para.split(Regex("\\s+")).filter { it.isNotEmpty() }.forEach { word ->
+                    val trial = if (line.isEmpty()) word else "$line $word"
+                    if (p.measureText(trial) <= width || line.isEmpty()) {
+                        line = trial
+                    } else {
+                        lines += line
+                        line = word
+                    }
+                }
+                if (line.isNotEmpty()) lines += line
+            }
+        }
+        return lines
+    }
 }
