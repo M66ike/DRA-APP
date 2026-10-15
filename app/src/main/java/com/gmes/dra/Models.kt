@@ -52,9 +52,31 @@ data class DraRecord(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
-    fun referenceLabel(): String {
-        val job = jobNumber.trim().ifBlank { "NO-JOB" }
-        return "${date.replace("-", "")}_$job"
+    fun referenceLabel(): String = formReferenceLabel()
+
+    fun formReferenceLabel(): String {
+        val name = projectName.trim().ifBlank { jobNumber.trim().ifBlank { "Job Name" } }
+        val code = try {
+            val parsed = SimpleDateFormat("yyyy-MM-dd", Locale.UK).parse(date)
+            SimpleDateFormat("yyMMdd", Locale.UK).format(parsed ?: Date())
+        } catch (_: Exception) {
+            date.replace("-", "").takeLast(6)
+        }
+        return "$code - $name"
+    }
+
+    fun exportFileBaseName(): String {
+        val name = projectName.trim().ifBlank { jobNumber.trim().ifBlank { "DRA" } }
+            .replace(Regex("[^A-Za-z0-9 _-]"), "")
+            .trim()
+            .replace(Regex("\\s+"), "_")
+        val code = try {
+            val parsed = SimpleDateFormat("yyyy-MM-dd", Locale.UK).parse(date)
+            SimpleDateFormat("yyMMdd", Locale.UK).format(parsed ?: Date())
+        } catch (_: Exception) {
+            date.replace("-", "").takeLast(6)
+        }
+        return "${code}_${name.ifBlank { "DRA" }}"
     }
 
     fun toJson(): String = JSONObject().apply {
