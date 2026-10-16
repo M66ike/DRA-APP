@@ -419,6 +419,9 @@ private fun Activities(d: DraRecord, en: Boolean, store: SavedDataStore, save: (
                                 savedVersion++
                                 Toast.makeText(context, "Activity saved", Toast.LENGTH_SHORT).show()
                             }) { Text("Save") }
+                            TextButton(onClick = {
+                                save(d.copy(activities = d.activities.filterNot { it.id == a.id }))
+                            }) { Text("Remove") }
                         }
                     }
                     Field("Planned Activity", a.planned, en, 2) { v ->
@@ -545,10 +548,26 @@ private fun Briefing(d: DraRecord, en: Boolean, save: (DraRecord) -> Unit, start
                 save(d.copy(supervisorSignatureBase64 = it))
             }
         }
+        if (d.attendees.isEmpty()) {
+            item {
+                Text(
+                    "No additional briefing attendees added. This is valid where the supervisor is working alone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
+        }
         itemsIndexed(d.attendees, key = { _, a -> a.id }) { i, a ->
             Card {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Attendee ${i + 1}", fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Attendee ${i + 1}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        if (en) {
+                            TextButton(onClick = {
+                                save(d.copy(attendees = d.attendees.filterNot { it.id == a.id }))
+                            }) { Text("Remove") }
+                        }
+                    }
                     Field("Name", a.name, en) { v ->
                         save(d.copy(attendees = d.attendees.map { if (it.id == a.id) it.copy(name = v) else it }))
                     }
@@ -832,8 +851,8 @@ private fun startErrors(d: DraRecord) = buildList {
         add("Supervisor name and signature are required")
     }
     val a = d.attendees.filter { it.name.isNotBlank() || it.signatureBase64.isNotBlank() }
-    if (a.isEmpty() || a.any { it.name.isBlank() || it.signatureBase64.isBlank() }) {
-        add("Each briefing attendee needs a name and signature")
+    if (a.any { it.name.isBlank() || it.signatureBase64.isBlank() }) {
+        add("Each added briefing attendee needs a name and signature")
     }
 }
 
