@@ -23,11 +23,15 @@ object PdfExporter {
     private val teal = Color.rgb(12, 110, 106)
     private val lightGrey = Color.rgb(211, 211, 211)
     private val border = Color.rgb(55, 55, 55)
+    private val darkGrey = Color.rgb(91, 91, 92)
 
     private data class Logos(val gmes: Bitmap?, val smart: Bitmap?)
 
     fun create(context: Context, dra: DraRecord): File {
-        val logos = Logos(loadAsset(context, "gmes_logo.b64"), loadAsset(context, "think_smart_logo.b64"))
+        val logos = Logos(
+            loadAsset(context, "gmes_logo.b64"),
+            loadAsset(context, "think_smart_logo.b64")
+        )
         val pdf = PdfDocument()
         pageOne(pdf, dra, logos)
         pageTwo(pdf, dra, logos)
@@ -59,7 +63,8 @@ object PdfExporter {
         detail(c, y, label, total, "Site Supervisor", d.siteSupervisor); y += 19f
 
         y = bar(c, y, "Main discussion points from previous work day events and todays activities", 21f, 9.5f)
-        cell(c, M, y, total, 38f, d.discussionPoints, 8.4f); y += 38f
+        val discussionH = if (d.discussionPoints.isBlank()) 28f else 42f
+        cell(c, M, y, total, discussionH, d.discussionPoints, 8.4f); y += discussionH
 
         val n = 16f
         val p = 171f
@@ -71,10 +76,12 @@ object PdfExporter {
         head(c, M + n + p + r, y, ctrl, 27f, "Risk Control Measures")
         y += 27f
 
-        val used = d.activities.filter { it.planned.isNotBlank() || it.risks.isNotBlank() || it.controls.isNotBlank() }.take(14)
-        val rows = (used + List(14) { ActivityItem() }).take(14)
-        val rowH = (830f - y) / 14f
-        rows.forEachIndexed { i, a ->
+        val used = d.activities
+            .filter { it.planned.isNotBlank() || it.risks.isNotBlank() || it.controls.isNotBlank() }
+            .take(14)
+
+        used.forEachIndexed { i, a ->
+            val rowH = activityHeight(a, p, r, ctrl).coerceAtMost(max(42f, 830f - y))
             cell(c, M, y, n, rowH, "${i + 1}", 8f, true, true)
             cell(c, M + n, y, p, rowH, a.planned, 8f)
             cell(c, M + n + p, y, r, rowH, a.risks, 8f)
@@ -89,9 +96,19 @@ object PdfExporter {
         var y = 100f
         y = bar(c, y, "Pre-start Checks", 23f, 10f)
         val intro = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK; textSize = 12.5f; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            color = Color.BLACK
+            textSize = 12.5f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
-        wrap(c, "Before starting work STOP, THINK and CHECK! What’s the worst that could happen specific to your tasks? What will stop you going home safe today?", M + 3, y + 5, PAGE_W - M * 2 - 6, 58f, intro)
+        wrap(
+            c,
+            "Before starting work STOP, THINK and CHECK! What’s the worst that could happen specific to your tasks? What will stop you going home safe today?",
+            M + 3,
+            y + 5,
+            PAGE_W - M * 2 - 6,
+            58f,
+            intro
+        )
         y += 64f
         val n = 16f
         val answer = 56f
@@ -103,9 +120,19 @@ object PdfExporter {
         }
         y = bar(c, y + 1, "STOP if anything changes!", 21f, 9.5f)
         val note = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK; textSize = 9f; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            color = Color.BLACK
+            textSize = 9f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
-        wrap(c, "If you or your team change tasks during the day, consider whether the DRA needs reviewing, think about the items above and re-evaluate if needed.", M + 3, y + 4, PAGE_W - M * 2 - 6, 55f, note)
+        wrap(
+            c,
+            "If you or your team change tasks during the day, consider whether the DRA needs reviewing, think about the items above and re-evaluate if needed.",
+            M + 3,
+            y + 4,
+            PAGE_W - M * 2 - 6,
+            55f,
+            note
+        )
         pdf.finishPage(page)
     }
 
@@ -123,25 +150,38 @@ object PdfExporter {
         signature(c, M + nameW, y, sigW, 70f, d.supervisorSignatureBase64)
         y += 76f
 
-        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 9.2f }
-        wrap(c, "I have been briefed and I understand my dynamic risk assessment, the key risks and required control measures specific to the tasks I am completing today", M + 2, y, total - 4, 34f, p)
-        y += 35f
-        y = bar(c, y, "Breifing attendees", 21f, 9.5f)
+        val people = d.attendees
+            .filter { it.name.isNotBlank() || it.signatureBase64.isNotBlank() }
+            .take(8)
 
-        val n = 16f
-        val attendee = 226f
-        val attendeeSig = total - n - attendee
-        head(c, M, y, n, 20f, "#")
-        head(c, M + n, y, attendee, 20f, "Name", false)
-        head(c, M + n + attendee, y, attendeeSig, 20f, "Signature", false)
-        y += 20f
-        val people = (d.attendees + List(8) { Attendee() }).take(8)
-        val rowH = (830f - y) / 8f
-        people.forEachIndexed { i, a ->
-            cell(c, M, y, n, rowH, "${i + 1}", 8f, true, true)
-            cell(c, M + n, y, attendee, rowH, a.name, 8.8f, false, true)
-            signature(c, M + n + attendee, y, attendeeSig, rowH, a.signatureBase64)
-            y += rowH
+        if (people.isNotEmpty()) {
+            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 9.2f }
+            wrap(
+                c,
+                "I have been briefed and I understand my dynamic risk assessment, the key risks and required control measures specific to the tasks I am completing today",
+                M + 2,
+                y,
+                total - 4,
+                34f,
+                p
+            )
+            y += 35f
+            y = bar(c, y, "Briefing attendees", 21f, 9.5f)
+
+            val n = 16f
+            val attendee = 226f
+            val attendeeSig = total - n - attendee
+            head(c, M, y, n, 20f, "#")
+            head(c, M + n, y, attendee, 20f, "Name", false)
+            head(c, M + n + attendee, y, attendeeSig, 20f, "Signature", false)
+            y += 20f
+            val rowH = min(82f, max(62f, (825f - y) / people.size.coerceAtLeast(1)))
+            people.forEachIndexed { i, a ->
+                cell(c, M, y, n, rowH, "${i + 1}", 8f, true, true)
+                cell(c, M + n, y, attendee, rowH, a.name, 8.8f, false, true)
+                signature(c, M + n + attendee, y, attendeeSig, rowH, a.signatureBase64)
+                y += rowH
+            }
         }
         pdf.finishPage(page)
     }
@@ -179,10 +219,53 @@ object PdfExporter {
         val c = p.canvas
         c.drawColor(Color.WHITE)
         c.drawRect(M, 11f, PAGE_W - M, 16f, Paint().apply { color = teal })
-        logos.gmes?.let { bitmap(c, it, RectF(M, 20f, 190f, 88f)) }
-        logos.smart?.let { bitmap(c, it, RectF(360f, 26f, PAGE_W - M, 86f)) }
+
+        if (logos.gmes != null) {
+            bitmap(c, logos.gmes, RectF(M, 20f, 205f, 88f))
+        } else {
+            fallbackGmes(c)
+        }
+
+        if (logos.smart != null) {
+            bitmapRight(c, logos.smart, RectF(345f, 22f, PAGE_W - M, 88f))
+        } else {
+            fallbackSmart(c)
+        }
         return p to c
     }
+
+    private fun fallbackGmes(c: Canvas) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = teal
+            textSize = 31f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        c.drawText("GMES", M + 8, 56f, p)
+        p.color = darkGrey
+        p.textSize = 6.3f
+        c.drawText("GROUP MANAGEMENT ELECTRICAL SURVEYS", M + 8, 69f, p)
+    }
+
+    private fun fallbackSmart(c: Canvas) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = teal
+            textSize = 28f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        c.drawText("THINK SMART", 372f, 58f, p)
+    }
+
+    private fun activityHeight(a: ActivityItem, plannedW: Float, riskW: Float, controlW: Float): Float {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 8f }
+        val planned = lineCount(a.planned, plannedW - 6f, p)
+        val risks = lineCount(a.risks, riskW - 6f, p)
+        val controls = lineCount(a.controls, controlW - 6f, p)
+        val count = max(1, max(planned, max(risks, controls)))
+        return max(42f, min(104f, 10f + count * 10.3f))
+    }
+
+    private fun lineCount(value: String, width: Float, paint: Paint): Int =
+        if (value.isBlank()) 1 else lines(value, width, paint).size.coerceAtLeast(1)
 
     private fun detail(c: Canvas, y: Float, labelW: Float, totalW: Float, label: String, value: String) {
         fill(c, M, y, labelW, 19f, lightGrey, label, 8.2f, false, true)
@@ -206,7 +289,11 @@ object PdfExporter {
 
     private fun bar(c: Canvas, y: Float, text: String, h: Float, size: Float): Float {
         c.drawRect(M, y, PAGE_W - M, y + h, Paint().apply { color = teal })
-        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = size; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = size
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
         c.drawText(text, M + 4, y + (h - p.ascent() - p.descent()) / 2, p)
         return y + h
     }
@@ -220,18 +307,43 @@ object PdfExporter {
         text(c, x, y, w, h, text, size, center, false, bold)
     }
 
-    private fun cell(c: Canvas, x: Float, y: Float, w: Float, h: Float, text: String, size: Float, center: Boolean = false, vertical: Boolean = false, bold: Boolean = false) {
+    private fun cell(
+        c: Canvas,
+        x: Float,
+        y: Float,
+        w: Float,
+        h: Float,
+        text: String,
+        size: Float,
+        center: Boolean = false,
+        vertical: Boolean = false,
+        bold: Boolean = false
+    ) {
         c.drawRect(x, y, x + w, y + h, Paint().apply { color = Color.WHITE })
         outline(c, x, y, w, h)
         text(c, x, y, w, h, text, size, center, vertical, bold)
     }
 
     private fun outline(c: Canvas, x: Float, y: Float, w: Float, h: Float) =
-        c.drawRect(x, y, x + w, y + h, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = border; style = Paint.Style.STROKE; strokeWidth = .8f })
+        c.drawRect(
+            x,
+            y,
+            x + w,
+            y + h,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = border
+                style = Paint.Style.STROKE
+                strokeWidth = .8f
+            }
+        )
 
     private fun text(c: Canvas, x: Float, y: Float, w: Float, h: Float, text: String, size: Float, center: Boolean, vertical: Boolean, bold: Boolean) {
         if (text.isBlank()) return
-        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = size; typeface = if (bold) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT }
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = size
+            typeface = if (bold) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
+        }
         val lines = lines(text, w - 6, p)
         val lh = p.textSize * 1.22f
         val maxLines = max(1, (h / lh).toInt())
@@ -245,17 +357,26 @@ object PdfExporter {
 
     private fun wrap(c: Canvas, text: String, x: Float, y: Float, w: Float, h: Float, p: Paint) {
         val lh = p.textSize * 1.22f
-        lines(text, w, p).take(max(1, (h / lh).toInt())).forEachIndexed { i, line -> c.drawText(line, x, y + p.textSize + i * lh, p) }
+        lines(text, w, p).take(max(1, (h / lh).toInt())).forEachIndexed { i, line ->
+            c.drawText(line, x, y + p.textSize + i * lh, p)
+        }
     }
 
     private fun lines(text: String, width: Float, p: Paint): List<String> {
         val result = mutableListOf<String>()
         text.split("\n").forEach { paragraph ->
-            if (paragraph.isBlank()) result += "" else {
+            if (paragraph.isBlank()) {
+                result += ""
+            } else {
                 var line = ""
                 paragraph.split(Regex("\\s+")).filter(String::isNotBlank).forEach { word ->
                     val trial = if (line.isBlank()) word else "$line $word"
-                    if (p.measureText(trial) <= width || line.isBlank()) line = trial else { result += line; line = word }
+                    if (p.measureText(trial) <= width || line.isBlank()) {
+                        line = trial
+                    } else {
+                        result += line
+                        line = word
+                    }
                 }
                 if (line.isNotBlank()) result += line
             }
@@ -270,22 +391,53 @@ object PdfExporter {
         val s = min((w - 12) / bmp.width, (h - 10) / bmp.height)
         val dw = bmp.width * s
         val dh = bmp.height * s
-        c.drawBitmap(bmp, null, RectF(x + (w - dw) / 2, y + (h - dh) / 2, x + (w + dw) / 2, y + (h + dh) / 2), Paint(Paint.ANTI_ALIAS_FLAG))
+        c.drawBitmap(
+            bmp,
+            null,
+            RectF(x + (w - dw) / 2, y + (h - dh) / 2, x + (w + dw) / 2, y + (h + dh) / 2),
+            Paint(Paint.ANTI_ALIAS_FLAG)
+        )
     }
 
     private fun bitmap(c: Canvas, bmp: Bitmap, box: RectF) {
         val s = min(box.width() / bmp.width, box.height() / bmp.height)
         val w = bmp.width * s
         val h = bmp.height * s
-        c.drawBitmap(bmp, null, RectF(box.left, box.top + (box.height() - h) / 2, box.left + w, box.top + (box.height() - h) / 2 + h), Paint(Paint.ANTI_ALIAS_FLAG))
+        c.drawBitmap(
+            bmp,
+            null,
+            RectF(box.left, box.top + (box.height() - h) / 2, box.left + w, box.top + (box.height() - h) / 2 + h),
+            Paint(Paint.ANTI_ALIAS_FLAG)
+        )
+    }
+
+    private fun bitmapRight(c: Canvas, bmp: Bitmap, box: RectF) {
+        val s = min(box.width() / bmp.width, box.height() / bmp.height)
+        val w = bmp.width * s
+        val h = bmp.height * s
+        c.drawBitmap(
+            bmp,
+            null,
+            RectF(box.right - w, box.top + (box.height() - h) / 2, box.right, box.top + (box.height() - h) / 2 + h),
+            Paint(Paint.ANTI_ALIAS_FLAG)
+        )
     }
 
     private fun loadAsset(context: Context, name: String): Bitmap? = runCatching {
         val raw = context.assets.open(name).bufferedReader().use { it.readText() }
-        val bytes = Base64.decode(raw, Base64.DEFAULT)
+        val bytes = Base64.decode(raw.trim(), Base64.DEFAULT)
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     }.getOrNull()
 
-    private fun status(s: String) = when (s) { STATUS_IN_PROGRESS -> "Open"; STATUS_CLOSED -> "Closed"; else -> "Not Started" }
-    private fun ans(v: Boolean?) = when (v) { true -> "Yes"; false -> "No"; null -> "" }
+    private fun status(s: String) = when (s) {
+        STATUS_IN_PROGRESS -> "Open"
+        STATUS_CLOSED -> "Closed"
+        else -> "Not Started"
+    }
+
+    private fun ans(v: Boolean?) = when (v) {
+        true -> "Yes"
+        false -> "No"
+        null -> ""
+    }
 }
